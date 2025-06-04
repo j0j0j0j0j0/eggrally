@@ -1,0 +1,12 @@
+{
+  "fps": 30,
+  "worldWidth": 900,
+  "worldHeight": 700,
+  "eggInitialHP": 5,
+  "eggWidth": 30,
+  "eggHeight": 40,
+  "numberOfEggnemies": 3,
+  "eggnemyWidth": 30,
+  "eggnemyHeight": 60,
+  "canvasID": "canvas"
+}
