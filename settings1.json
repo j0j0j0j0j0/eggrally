@@ -1,0 +1,19 @@
+{
+  "screenWidth": 1000,
+  "screenHeight": 800,
+  "worldWidth": 1500,
+  "worldHeight": 1500,
+  "fps": 30,
+  "eggWidth": 50,
+  "eggHeight": 60,
+  "eggInitialHP": 20,
+  "eggnemyWidth": 50,
+  "eggnemyHeight": 60,
+  "eggnemyInitialHP": 3,
+  "initialNumberOfEggnemies": 5,
+  "eggnemiesToDefeatForBoss": 5,
+  "bossInitialHP": 10,
+  "bossWidth": 20,
+  "bossHeight": 24,
+  "canvasID": "canvas"
+}
