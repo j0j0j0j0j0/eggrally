@@ -1,4 +1,4 @@
-// Phase 1
+// Phase 1 not done gameover logic succ
 
 import { Cmd, h, startModelCmd } from "cs12242-mvu/src"
 import { CanvasMsg, canvasView } from "cs12242-mvu/src/canvas"
