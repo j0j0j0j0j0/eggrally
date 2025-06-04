@@ -1,4 +1,4 @@
-// Phase 1 not done gameover logic succ
+// Phase 1
 
 import { Cmd, h, startModelCmd } from "cs12242-mvu/src"
 import { CanvasMsg, canvasView } from "cs12242-mvu/src/canvas"
@@ -6,14 +6,6 @@ import * as Canvas from "cs12242-mvu/src/canvas"
 import { Match as M, Schema as S, pipe } from "effect"
 
 // TYPES
-const Rectangle = S.Struct({
-    x: S.Number,
-    y: S.Number,
-    width: S.Number,
-    height: S.Number,
-})
-type Rectangle = typeof Rectangle.Type
-
 const Egg = S.Struct({
     x: S.Number,
     y: S.Number,
@@ -31,6 +23,7 @@ const Eggnemy = S.Struct({
     height: S.Number,
     currentHP: S.Number,
     maxHP: S.Number,
+    attackDamage: S.Number,
 })
 type Eggnemy = typeof Eggnemy.Type
 
@@ -41,6 +34,9 @@ const Boss = S.Struct({
     height: S.Number,
     currentHP: S.Number,
     maxHP: S.Number,
+    isActive: S.Boolean,
+    hasSpawned: S.Boolean,
+    attackDamage: S.Number,
 })
 type Boss = typeof Boss.Type
 
@@ -67,19 +63,6 @@ const Config = S.Struct({
     bossHeight: S.Int,
 })
 type Config = typeof Config.Type
-
-const Model = S.Struct({
-    config: Config,
-    egg: Egg,
-    eggnemies: S.Array(Eggnemy),
-    boss: S.Union(Boss, S.Null),
-    isGameOver: S.Boolean,
-    isWon: S.Boolean,
-    score: S.Int,
-    ticks: S.Int,
-    lastHit: S.Int,
-})
-type Model = typeof Model.Type
 
 // HELPERS
 const getCenter = (e: Entity) => ({
@@ -111,11 +94,37 @@ const spawnEggnemies = (settings): Eggnemy[] =>
             height: settings.eggnemyHeight,
             currentHP: settings.eggnemyInitialHP,
             maxHP: settings.eggnemyInitialHP,
+            attackDamage: 1, // hardcoded
         }
     })
 
-const attack = (model: Model): [Eggnemy[], Boss | null, number] => {
-    let defeated = 0
+const spawnSingleEggnemy = (config: Config): Eggnemy => {
+    const maxX = config.worldWidth - config.eggnemyWidth
+    const maxY = config.worldHeight - config.eggnemyHeight
+    return {
+        x: Math.floor(Math.random() * maxX),
+        y: Math.floor(Math.random() * maxY),
+        width: config.eggnemyWidth,
+        height: config.eggnemyHeight,
+        currentHP: config.eggnemyInitialHP,
+        maxHP: config.eggnemyInitialHP,
+        attackDamage: 1,
+    }
+}
+
+const spawnBoss = (model: Model): Boss => ({
+    x: Math.random() * model.config.worldWidth,
+    y: Math.random() * model.config.worldHeight,
+    width: model.config.bossWidth,
+    height: model.config.bossHeight,
+    currentHP: model.config.bossInitialHP,
+    maxHP: model.config.bossInitialHP,
+    isActive: true,
+    hasSpawned: true,
+    attackDamage: 3,
+})
+const attack = (model: Model): [Eggnemy[], number] => {
+    let defeated: number = 0
     const newEggnemies = model.eggnemies.map((enem) => {
         if (isColliding(model.egg, enem)) {
             const newHP = enem.currentHP - 1
@@ -125,25 +134,10 @@ const attack = (model: Model): [Eggnemy[], Boss | null, number] => {
         return enem
     }).filter(enem => enem.currentHP > 0)
 
-    let newBoss = model.boss
-    if (!newBoss && model.score + defeated >= model.config.eggnemiesToDefeatForBoss) {
-        newBoss = {
-            x: Math.random() * model.config.worldWidth,
-            y: Math.random() * model.config.worldHeight,
-            width: model.config.bossWidth,
-            height: model.config.bossHeight,
-            currentHP: model.config.bossInitialHP,
-            maxHP: model.config.bossInitialHP,
-        }
-    } else if (newBoss && isColliding(model.egg, newBoss)) {
-        newBoss = { ...newBoss, currentHP: newBoss.currentHP - 1 }
-        if (newBoss.currentHP <= 0) newBoss = null
-    }
-
-    return [newEggnemies, newBoss, defeated]
+    return [newEggnemies, defeated]
 }
 
-const move = (egg: Egg, key: string, config: Config) => {
+const move = (egg: Egg, key: string, config: Config):Egg => {
     const speed = 10
     const x = key === "a" ? egg.x - speed : key === "d" ? egg.x + speed : egg.x
     const y = key === "w" ? egg.y - speed : key === "s" ? egg.y + speed : egg.y
@@ -155,13 +149,13 @@ const move = (egg: Egg, key: string, config: Config) => {
 }
 
 const moveToward = (from: Entity, to: Entity, speed = 1): Entity => {
-    const dx = to.x + to.width / 2 - (from.x + from.width / 2)
-    const dy = to.y + to.height / 2 - (from.y + from.height / 2)
-    const d = Math.sqrt(dx * dx + dy * dy) || 1
+    const diffX = to.x + to.width / 2 - (from.x + from.width / 2)
+    const diffY = to.y + to.height / 2 - (from.y + from.height / 2)
+    const distance = Math.sqrt(diffX * diffX + diffY * diffY) || 1 
     return {
         ...from,
-        x: from.x + (dx / d) * speed,
-        y: from.y + (dy / d) * speed,
+        x: from.x + (diffX / distance) * speed,
+        y: from.y + (diffY / distance) * speed,
     } as Entity
 }
 
@@ -170,61 +164,24 @@ const isColliding = (a: Entity, b: Entity): boolean => (
     a.y < b.y + b.height && a.y + a.height > b.y
 )
 
-const Update = (msg: CanvasMsg, model: Model): Model =>
-    M.value(msg).pipe(
-        M.tag("Canvas.MsgKeyDown", ({ key }) => {
-            if (model.isGameOver || model.isWon) return model
-            const egg = move(model.egg, key, model.config)
-            const [eggnemies, boss, defeated] = key === "l" ? attack({ ...model, egg }) : [model.eggnemies, model.boss, 0]
-            const score = model.score + defeated
-
-            return { ...model, egg, eggnemies, boss, score }
-        }),
-        M.tag("Canvas.MsgTick", () => {
-            let egg = model.egg
-            let boss = model.boss
-            let lastHit = model.lastHit
-            let gameOver = model.isGameOver
-            let victory = model.isWon
-
-            const canTakeDamage = (model.ticks + 1 - model.lastHit) >= model.config.fps
-            if (canTakeDamage) {
-                if (boss && isColliding(egg, boss)) {
-                    egg = { ...egg, currentHP: egg.currentHP - 3 }
-                    lastHit = model.ticks + 1
-                } else {
-                    for (const enem of model.eggnemies) {
-                        if (isColliding(egg, enem)) {
-                            egg = { ...egg, currentHP: egg.currentHP - 1 }
-                            lastHit = model.ticks + 1
-                            break 
-                        }
-                    }
-                }
-            }
-            if (egg.currentHP <= 0) gameOver = true
-            if (boss && boss.currentHP <= 0) victory = true
-
-            const eggnemies = model.eggnemies.map(enem => moveToward(enem, egg) as Eggnemy)
-            if (boss && !victory) boss = moveToward(boss, egg, 2) as Boss
-
-            return {
-                ...model,
-                egg,
-                boss,
-                eggnemies: gameOver || victory ? model.eggnemies : eggnemies,
-                ticks: model.ticks + 1,
-                lastHit,
-                isGameOver: gameOver,
-                isWon: victory,
-            }
-        }),
-        M.orElse(() => model)
-    )
+// MVU
+type Model = typeof Model.Type
+const Model = S.Struct({
+    config: Config,
+    egg: Egg,
+    eggnemies: S.Array(Eggnemy),
+    boss: Boss,
+    isGameOver: S.Boolean,
+    isWon: S.Boolean,
+    score: S.Int,
+    ticks: S.Int,
+    lastHit: S.Int,
+    nextSpawn: S.Int,
+})
 
 const View = (model: Model) => {
-    const offsetX = model.egg.x - model.config.screenWidth / 2
-    const offsetY = model.egg.y - model.config.screenHeight / 2
+    const offsetX = model.egg.x + model.egg.width / 2 - model.config.screenWidth / 2 // rel to egg center
+    const offsetY = model.egg.y + model.egg.height / 2 - model.config.screenHeight / 2 
     const time = `${Math.floor(model.ticks / model.config.fps / 60)}:${String(Math.floor(model.ticks / model.config.fps) % 60).padStart(2, '0')}`
 
     const items = [
@@ -233,28 +190,30 @@ const View = (model: Model) => {
         Canvas.SolidRectangle.make({ x: -offsetX, y: model.config.worldHeight - offsetY, width: model.config.worldWidth, height: 1, color: "white" }),
         Canvas.SolidRectangle.make({ x: -offsetX, y: -offsetY, width: 1, height: model.config.worldHeight, color: "white" }),
         Canvas.SolidRectangle.make({ x: model.config.worldWidth - offsetX, y: -offsetY, width: 1, height: model.config.worldHeight, color: "white" }),
-        Canvas.SolidRectangle.make({ 
-            x: model.config.screenWidth / 2 - model.egg.width / 2, 
-            y: model.config.screenHeight / 2 - model.egg.height / 2,
-            width: model.egg.width, 
-            height: model.egg.height, 
-            color: "white" }),
-        Canvas.Text.make({ 
-            x: model.config.screenWidth / 2, 
-            y: model.config.screenHeight / 2  + model.egg.height / 2 + 12, 
-            text: `${model.egg.currentHP}/${model.egg.maxHP}`, 
-            fontSize: 12, color: "white", 
-            textAlign: "center" }),
+        ...(model.isGameOver? [] : [
+            Canvas.SolidRectangle.make({ 
+                x: model.config.screenWidth / 2 - model.egg.width / 2, 
+                y: model.config.screenHeight / 2 - model.egg.height / 2,
+                width: model.egg.width, 
+                height: model.egg.height, 
+                color: "white" }),
+            Canvas.Text.make({ 
+                x: model.config.screenWidth / 2, 
+                y: model.config.screenHeight / 2  + model.egg.height / 2 + 12, 
+                text: `${model.egg.currentHP}/${model.egg.maxHP}`, 
+                fontSize: 12, color: "white", 
+                textAlign: "center" })]),
         Canvas.Text.make({ x: 50, y: 20, text: `Time: ${time}`, fontSize: 16, color: "white" }),
         Canvas.Text.make({ x: 50, y: 40, text: `Defeated: ${model.score}`, fontSize: 16, color: "white" }),
     ]
 
-    if (model.isWon) {
-        items.push(Canvas.Text.make({ x: model.config.screenWidth / 2, y: model.config.screenHeight / 2 - 20, text: "You Win!", fontSize: 20, color: "lime", textAlign: "center" }))
+    if (model.isWon && model.boss.hasSpawned && !model.isGameOver) {
+        items.push(Canvas.Text.make({ x: model.config.screenWidth / 2, y: model.config.screenHeight / 2 - model.egg.height, text: "You Win!", fontSize: 20, color: "white", textAlign: "center" }))
     }
 
     if (model.isGameOver && !model.isWon) {
-        items.push(Canvas.Text.make({ x: model.config.screenWidth / 2, y: model.config.screenHeight / 2 - 20, text: "Game Over", fontSize: 20, color: "red", textAlign: "center" }))
+        items.push(Canvas.Clear.make({color: "black"}))
+        items.push(Canvas.Text.make({ x: model.config.screenWidth / 2, y: model.config.screenHeight / 2 - model.egg.height, text: "Game Over", fontSize: 20, color: "white", textAlign: "center" }))
     }
 
     for (const enem of model.eggnemies) {
@@ -275,13 +234,107 @@ const View = (model: Model) => {
     }))
 }
 
-    if (model.boss) {
+    if (model.boss.isActive) {
         items.push(Canvas.SolidRectangle.make({ x: model.boss.x - offsetX, y: model.boss.y - offsetY, width: model.boss.width, height: model.boss.height, color: "red" }))
         items.push(Canvas.Text.make({ x: model.boss.x - offsetX, y: model.boss.y - offsetY - 12, text: `${model.boss.currentHP}/${model.boss.maxHP}`, fontSize: 12, color: "red" }))
     }
 
     return items
 }
+
+const Update = (msg: CanvasMsg, model: Model): Model =>
+    M.value(msg).pipe(
+        M.tag("Canvas.MsgKeyDown", ({ key }) => {
+            if (model.isGameOver || model.isWon) return model
+
+            const egg = move(model.egg, key, model.config)
+            let boss = model.boss
+            let defeated = 0
+            let eggnemies = model.eggnemies
+            let score = model.score
+
+            if (key === "l") {
+                [eggnemies, defeated] = attack({ ...model, egg })
+                score += defeated
+            }
+
+            if (!boss.hasSpawned && !boss.isActive && score >= model.config.eggnemiesToDefeatForBoss) {
+                boss = spawnBoss(model)
+            }
+
+            if (boss.isActive && key === "l" && isColliding(egg, boss)) {
+                const newHP = boss.currentHP - 1
+                boss = { ...boss, currentHP: newHP, isActive: newHP > 0 }
+            }
+
+            return { ...model, egg, eggnemies, boss, score }
+        }),
+
+        M.tag("Canvas.MsgTick", () => {
+            if (model.isGameOver || model.isWon) return model
+
+            let egg = model.egg
+            let eggnemies = model.eggnemies
+            let boss = model.boss
+            let lastHit = model.lastHit
+            let nextSpawn = model.nextSpawn - 1
+
+            const canTakeDamage = (model.ticks + 1 - model.lastHit) >= model.config.fps
+            if (canTakeDamage) {
+                if (boss.isActive && isColliding(egg, boss)) {
+                    egg = { ...egg, currentHP: egg.currentHP - boss.attackDamage }
+                    lastHit = model.ticks + 1
+                } 
+                else {
+                    for (const enem of model.eggnemies) {
+                        if (isColliding(egg, enem)) {
+                            egg = { ...egg, currentHP: egg.currentHP - enem.attackDamage }
+                            lastHit = model.ticks + 1
+                            break
+                        }
+                    }
+                }
+            }
+            if (nextSpawn <= 0) {
+                eggnemies = [...eggnemies, spawnSingleEggnemy(model.config)]
+                nextSpawn = Math.floor(Math.random() * model.config.fps * 7) + 3 + model.config.fps // 3 to 10 seconds
+            }
+            console.log("Spawning new eggnemy at tick:", model.nextSpawn)
+            const gameOver = egg.currentHP <= 0
+            const victory = boss.hasSpawned && !boss.isActive && boss.currentHP <= 0
+
+            if (gameOver || victory) {
+                return {
+                    ...model,
+                    egg,
+                    boss: victory ? { ...boss, isActive: false } : boss,
+                    lastHit,
+                    ticks: model.ticks + 1,
+                    isGameOver: gameOver,
+                    isWon: victory,
+                    nextSpawn,
+                    eggnemies,
+                }
+            }
+
+            eggnemies = eggnemies.map(enem => moveToward(enem, egg) as Eggnemy)
+            if (boss.isActive) boss = moveToward(boss, egg, 2) as Boss // faster
+
+            return {
+                ...model,
+                egg,
+                boss,
+                eggnemies,
+                lastHit,
+                ticks: model.ticks + 1,
+                isGameOver: gameOver,
+                isWon: victory,
+                nextSpawn,
+            }
+        }),
+
+        M.orElse(() => model)
+    )
 
 // START
 const root = document.getElementById("app")!
@@ -298,12 +351,24 @@ getSettings().then(settings => {
             maxHP: settings.eggInitialHP,
         },
         eggnemies: spawnEggnemies(settings),
-        boss: null,
+        boss: {
+            x: 0,
+            y: 0,
+            width: settings.bossWidth,
+            height: settings.bossHeight,
+            currentHP: 0,
+            maxHP: settings.bossInitialHP,
+            isActive: false,
+            hasSpawned: false,
+            attackDamage: 3, // hardcoded
+        },
         isGameOver: false,
         isWon: false,
         score: 0,
         ticks: 0,
         lastHit: -1000,
+        nextSpawn: Math.floor(Math.random() * settings.fps * 7) + 3 + settings.fps, // 3 to 10s delay
+
     }
 
     startModelCmd(
