@@ -1,3 +1,3 @@
 # eggrally
 cs12 proj
-phase 1 so far
+phase 2 so far: need pytests
