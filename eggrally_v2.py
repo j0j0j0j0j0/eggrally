@@ -6,7 +6,24 @@ from enum import IntEnum
 from dataclasses import dataclass
 from typing import Callable
 
-# Phase 1 so disorganized ehhe
+# Phase 1 
+class PyxelColors(IntEnum):
+    BLACK = 0
+    DARK_BLUE = 1
+    MAGENTA = 2
+    CYAN = 3
+    BROWN = 4
+    BLUE = 5
+    INDIGO = 6
+    WHITE = 7
+    RED = 8
+    ORANGE = 9
+    YELLOW = 10
+    TEAL = 11
+    LIGHT_BLUE = 12
+    GREY = 13
+    PEACH = 14
+    PASTEL = 15
 
 @dataclass
 class Rectangle:
@@ -67,34 +84,23 @@ class Config:
     world_width: int
     world_height: int
     fps: int
-    init_eggnemy_count: int
+    egg_width: int
+    egg_height: int
+    egg_init_hp: int
     egg_speed: int
+    egg_color: int
+    eggnemy_width: int
+    eggnemy_height: int
+    eggnemy_init_hp: int
+    init_eggnemy_count: int
+    eggnemies_to_defeat_for_boss: int
     eggnemy_speed: int
-    boss_speed: int
+    eggnemy_color: int
     boss_width: int
     boss_height: int
-    egg_color: int
-    eggnemy_color: int
+    boss_init_hp: int
+    boss_speed: int
     boss_color: int
-    eggnemies_to_defeat_for_boss: int
-
-class PyxelColors(IntEnum):
-    BLACK = 0
-    DARK_BLUE = 1
-    MAGENTA = 2
-    CYAN = 3
-    BROWN = 4
-    BLUE = 5
-    INDIGO = 6
-    WHITE = 7
-    RED = 8
-    ORANGE = 9
-    YELLOW = 10
-    TEAL = 11
-    LIGHT_BLUE = 12
-    GREY = 13
-    PEACH = 14
-    PASTEL = 15
 
 # MVU
 class Model:
@@ -107,39 +113,39 @@ class Model:
         self._ticks = 0
         self._last_hit = -1000
         self._boss: Boss | None = None
+        self._has_defeated_boss = False
 
     def update(self):
         if self._is_game_over:
             return
 
+        spawn_chance = 0.2 / self._config.fps
+        if random.random() < spawn_chance:
+            self._spawn_eggnemy()
+
+        if not self._boss and self._score >= self._config.eggnemies_to_defeat_for_boss:
+            self._spawn_boss()
+
         self._ticks += 1
+        self._move_egg()
 
-        
-        offset_x = offset_y = 0
-        if pyxel.btn(pyxel.KEY_W): offset_y -= self._config.egg_speed
-        if pyxel.btn(pyxel.KEY_S): offset_y += self._config.egg_speed
-        if pyxel.btn(pyxel.KEY_A): offset_x -= self._config.egg_speed
-        if pyxel.btn(pyxel.KEY_D): offset_x += self._config.egg_speed
-
-        # Clamp egg position inside world boundaries
-        self._egg.x = max(0, min(self._egg.x + offset_x, self.world_width - self._egg.width))
-        self._egg.y = max(0, min(self._egg.y + offset_y, self.world_height - self._egg.height))
-
-        # Update boss and enemies as before
-        if self._boss:
-            self._boss.move_towards(self._egg, self._config.boss_speed)
-            if self._is_colliding(self._egg, self._boss):
-                if self._ticks - self._last_hit >= self._config.fps:
-                    self._egg.current_hp -= 3 
-                    self._last_hit = self._ticks
-                    if self._egg.current_hp <= 0:
-                        self._is_game_over = True
+        can_be_damaged = self._ticks - self._last_hit >= self._config.fps
 
         for enemy in self._eggnemies:
             enemy.move_towards(self._egg, self._config.eggnemy_speed)
             if self._is_colliding(self._egg, enemy):
-                if self._ticks - self._last_hit >= self._config.fps:
+                if can_be_damaged:
                     self._egg.current_hp -= 1
+                    self._last_hit = self._ticks
+                    if self._egg.current_hp <= 0:
+                        self._is_game_over = True
+        if self._boss:
+            self._boss.move_towards(self._egg, self._config.boss_speed)
+            if self._is_colliding(self._egg, self._boss):
+                if can_be_damaged:
+                    self._egg.current_hp -= 3
+                    if self._egg.current_hp < 0:
+                        self._egg.current_hp = 0
                     self._last_hit = self._ticks
                     if self._egg.current_hp <= 0:
                         self._is_game_over = True
@@ -147,32 +153,64 @@ class Model:
         if pyxel.btn(pyxel.KEY_L):
             self._attack()
 
-        if not self._eggnemies and not self._boss:
-            self._boss = Boss(
-                x = random.randint(0, self.world_width - self._config.boss_width),
-                y = random.randint(0, self.world_height - self._config.boss_height),
-                width = 32,
-                height = 32,
-                color = self._config.boss_color,
-                current_hp = 10,
-                max_hp = 10
-            )
+    def _move_egg(self):
+        offset_x = offset_y = 0
+        if pyxel.btn(pyxel.KEY_W): offset_y -= self._config.egg_speed
+        if pyxel.btn(pyxel.KEY_S): offset_y += self._config.egg_speed
+        if pyxel.btn(pyxel.KEY_A): offset_x -= self._config.egg_speed
+        if pyxel.btn(pyxel.KEY_D): offset_x += self._config.egg_speed
+
+        self._egg.x = max(0, min(self._egg.x + offset_x, self.world_width - self._egg.width))
+        self._egg.y = max(0, min(self._egg.y + offset_y, self.world_height - self._egg.height))
 
     def _attack(self):
-        attack_range = 50
-        target_x, target_y = self._egg.midx, self._egg.midy
-        self._eggnemies = [e for e in self._eggnemies if math.hypot(e.midx - target_x, e.midy - target_y) > attack_range or not self._increment_score()]
+        attack_range = self._egg.width #?? for relative range?
+
+        new_eggnemies: list[Eggnemy] = []
+        for e in self._eggnemies:
+            if self._get_distance(self._egg, e) > attack_range:
+                new_eggnemies.append(e)
+            else:
+                assert self._get_distance(self._egg, e) <= attack_range
+                e.current_hp -= 1
+                if e.current_hp <= 0:
+                    self._score += 1
+                    continue
+                else:
+                    new_eggnemies.append(e)
+
+        self._eggnemies = new_eggnemies
         if self._boss:
-            dist = math.hypot(self._boss.midx - target_x, self._boss.midy - target_y)
-            if dist <= attack_range:
+            if self._get_distance(self._egg, self._boss) <= attack_range:
                 self._boss.current_hp -= 1
                 if self._boss.current_hp <= 0:
-                    self._score += 1
+                    self._boss = None
+                    self._has_defeated_boss = True
                     self._is_game_over = True
 
-    def _increment_score(self):
-        self._score += 1
-        return False
+    def _spawn_eggnemy(self):
+        self._eggnemies.append(Eggnemy(
+            x = random.randint(0, self.world_width - self._config.eggnemy_width),
+            y = random.randint(0, self.world_height - self._config.eggnemy_height),
+            width = self._config.eggnemy_width,
+            height = self._config.eggnemy_height,
+            color = self._config.eggnemy_color,
+            current_hp = self._config.eggnemy_init_hp,
+            max_hp = self._config.eggnemy_init_hp,
+        ))
+    def _spawn_boss(self):
+        self._boss =  Boss(
+                x = random.randint(0, self.world_width - self._config.boss_width),
+                y = random.randint(0, self.world_height - self._config.boss_height),
+                width = self._config.boss_width,
+                height = self._config.boss_height,
+                color = self._config.boss_color,
+                current_hp = self._config.boss_init_hp,
+                max_hp = self._config.boss_init_hp,
+            )
+    
+    def _get_distance(self, r1: Rectangle, r2: Rectangle):
+        return math.sqrt((r1.midx - r2.midx) ** 2 + (r1.midy - r2.midy) ** 2)
 
     def _is_colliding(self, r1: Rectangle, r2: Rectangle):
         return not (r1.right < r2.left or r1.left > r2.right or r1.bottom < r2.top or r1.top > r2.bottom)
@@ -183,6 +221,8 @@ class Model:
     def eggnemies(self): return self._eggnemies
     @property
     def boss(self): return self._boss
+    @property
+    def has_defeated_boss(self): return self._has_defeated_boss
     @property
     def is_game_over(self): return self._is_game_over
     @property
@@ -219,13 +259,22 @@ class View:
             pyxel.rect(r.x - cam_x, r.y - cam_y, r.width, r.height, r.color)
 
         draw_rect(model.egg)
-        pyxel.text(model.egg.x - cam_x + 15, model.egg.y - cam_y + model.egg.height + 8, f"{model.egg.current_hp}/{model.egg.max_hp}", model.egg.color)
+        pyxel.text(model.screen_width // 2 - 10, model.egg.y - cam_y + model.egg.height + 5, f"{model.egg.current_hp}/{model.egg.max_hp}", model.egg.color)
 
         for e in model.eggnemies:
             draw_rect(e)
+            pyxel.text(e.x - cam_x, e.y - cam_y + e.height + 5, f"{e.current_hp}/{e.max_hp}", e.color)
+
         if model.boss:
             draw_rect(model.boss)
-            pyxel.text(model.boss.x - cam_x, model.boss.y - 10 - cam_y, f"Boss HP: {model.boss.current_hp}", PyxelColors.WHITE)
+            pyxel.text(model.boss.x - cam_x, model.boss.y - cam_y + model.boss.height + 5, f"{model.boss.current_hp}/{model.boss.max_hp}", PyxelColors.WHITE)
+
+        if model.is_game_over:
+            if model.has_defeated_boss and model.egg.current_hp >= 0:
+                pyxel.text(model.screen_width // 2 - 15, model.screen_height // 2 - model.egg.height, "You Win!", PyxelColors.WHITE)
+            else:
+                assert not model.has_defeated_boss and model.egg.current_hp <= 0
+                pyxel.text(model.screen_width // 2 - 20, model.screen_height // 2 - model.egg.height, "GAME OVER", PyxelColors.RED)
 
         pyxel.rectb(-cam_x, -cam_y, model.world_width, model.world_height, PyxelColors.WHITE) # border
         pyxel.text(5, 5, f"Score: {model.score}", PyxelColors.WHITE)
@@ -250,44 +299,52 @@ if __name__ == "__main__":
     with open("settings1.json") as f:
         s = json.load(f)
 
-    config = Config(
+    config = Config( # hardcoded speeds and colors for now to work with ts
         screen_width = s["screenWidth"],
         screen_height = s["screenHeight"],
         world_width = s["worldWidth"],
         world_height = s["worldHeight"],
         fps = s["fps"],
+        egg_width = s["eggWidth"],
+        egg_height = s["eggHeight"],
+        egg_init_hp = s["eggInitialHP"],
+        egg_speed = 3,
+        egg_color = PyxelColors.WHITE,
+        eggnemy_width = s["eggnemyWidth"],
+        eggnemy_height = s["eggnemyHeight"],
+        eggnemy_init_hp = s["eggnemyInitialHP"],
         init_eggnemy_count = s["initialNumberOfEggnemies"],
         eggnemies_to_defeat_for_boss = s["eggnemiesToDefeatForBoss"],
-        egg_speed = 5,
-        eggnemy_speed = 2,
-        boss_speed = 3,
+        eggnemy_speed = 1,
+        eggnemy_color = PyxelColors.YELLOW,
         boss_width = s["bossWidth"],
         boss_height = s["bossHeight"],
-        egg_color = PyxelColors.WHITE,
-        eggnemy_color = PyxelColors.YELLOW,
+        boss_init_hp = s["bossInitialHP"],
+        boss_speed = 2,
         boss_color = PyxelColors.RED,
     )
 
     egg = Egg(
-        x=s["worldWidth"] // 2,
-        y=s["worldHeight"] // 2,
-        width=s["eggWidth"],
-        height=s["eggHeight"],
-        current_hp=s["eggInitialHP"],
-        max_hp=s["eggInitialHP"],
-        color=config.egg_color
+        x = config.world_width // 2,
+        y = config.world_height // 2,
+        width = config.egg_width,
+        height = config.egg_height,
+        current_hp = config.egg_init_hp,
+        max_hp = config.egg_init_hp,
+        color = config.egg_color
     )
 
     enemies = [
         Eggnemy(
-            x = random.randint(0, s["worldWidth"] - s["eggnemyWidth"]),
-            y = random.randint(0, s["worldHeight"] - s["eggnemyHeight"]),
-            width = s["eggnemyWidth"],
-            height = s["eggnemyHeight"],
+            x = random.randint(0, config.world_width - config.eggnemy_width),
+            y = random.randint(0, config.world_height - config.eggnemy_height),
+            width = config.eggnemy_width,
+            height = config.eggnemy_height,
             color = config.eggnemy_color,
-            current_hp = s["eggnemyInitialHP"],
-            max_hp = s["eggnemyInitialHP"]
-        ) for _ in range(config.init_eggnemy_count)
+            current_hp = config.eggnemy_init_hp,
+            max_hp = config.eggnemy_init_hp
+        )
+        for _ in range(config.init_eggnemy_count)
     ]
 
     model = Model(config, egg, enemies)
